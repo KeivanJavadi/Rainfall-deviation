@@ -1,0 +1,98 @@
+// CHIRPS data is provided as pentadal (5-day) totals.  
+// We need to aggregate this data to obtain monthly totals.  
+// Additionally, we will compute long-term monthly averages over a 30-year period.  
+var chirps=ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD")
+// Define the range of years for the long-term average (LPA)  
+var lpaYears = ee.List.sequence(1987, 2022);  
+var months = ee.List.sequence(1, 12);  
+
+// Step 1: Define the region of interest (ROI) for Hamedan
+// you can change the name of region to your region
+var ROI1 = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level1")   
+            .filter(ee.Filter.eq('ADM1_NAME', 'Hamedan'));  
+Map.addLayer(ROI1);  
+print(ROI1);  
+
+// Create a collection of monthly totals for each year  
+var monthlyImages = lpaYears.map(function(year) {  
+  return months.map(function(month) {  
+    var filtered = chirps  
+      .filter(ee.Filter.calendarRange(year, year, 'year'))  
+      .filter(ee.Filter.calendarRange(month, month, 'month'));  
+      
+    var monthly = filtered.sum().clip(ROI1);  // Clip to the region of interest  
+    return monthly.set({'month': month, 'year': year});  
+  });  
+}).flatten();  
+
+// Create an ImageCollection containing one image per month for the entire long-term period  
+var monthlyCol = ee.ImageCollection.fromImages(monthlyImages);  
+
+// Compute the average rainfall for each month across all years  
+var longTermMeans = months.map(function(month) {  
+    var filtered = monthlyCol.filter(ee.Filter.eq('month', month));  
+    var monthlyMean = filtered.mean().clip(ROI1);  // Clip to the region of interest  
+    return monthlyMean.set('month', month);  
+});  
+var monthlyRainfall = ee.ImageCollection.fromImages(longTermMeans);  
+
+// Filter the CHIRPS data for the year 2023  
+var filtered = chirps  
+  .filter(ee.Filter.date('2023-01-01', '2023-12-31'))  
+  .filter(ee.Filter.bounds(ROI1));  
+
+// Calculate monthly total rainfall for 2023  
+var monthlyTotals = months.map(function(month) {  
+  return filtered  
+    .filter(ee.Filter.calendarRange(month, month, 'month'))  
+    .sum()  
+    .clip(ROI1)  // Clip to the region of interest  
+    .set('month', month);  
+});  
+var observedRainfall = ee.ImageCollection.fromImages(monthlyTotals);  
+
+print(observedRainfall);  
+
+// Define visualization parameters  
+var palette = ['white', 'blue'];  
+var visParams = {  
+  min: 0,  
+  max: 2500,  
+  palette: palette  
+};  
+
+// Add layers to the map for long-term and current rainfall  
+Map.addLayer(monthlyRainfall.sum(), visParams, 'Long Term');  
+Map.addLayer(observedRainfall.sum(), visParams, 'Current');  
+
+// Calculate the percentage deviation from the long-term mean  
+var deviation = months.map(function(month) {  
+  var longTermMean = monthlyRainfall  
+    .filter(ee.Filter.eq('month', month)).first();  
+  var monthlyObserved = observedRainfall  
+    .filter(ee.Filter.eq('month', month)).first();  
+    
+  var deviation = (monthlyObserved.subtract(longTermMean)  
+    .divide(longTermMean)).multiply(100)  
+    .set('month', month);  
+    
+  return deviation.clip(ROI1);  // Clip to the region of interest  
+});  
+
+// Create a chart to visualize the deviation  
+var chart = ui.Chart.image.series({  
+  imageCollection: ee.ImageCollection.fromImages(deviation),   
+  region: ROI1,   
+  reducer: ee.Reducer.mean(),   
+  scale: 10000,  
+  xProperty: 'month'  
+}).setOptions({  
+  interpolateNulls: true,  
+  lineWidth: 1,  
+  pointSize: 3,  
+  title: 'Rainfall Deviation from Long-term Mean',  
+  vAxis: {title: 'Deviation (%)'},  
+  hAxis: {title: 'Month', gridlines: {count: 12}}  
+});  
+
+print(chart);
